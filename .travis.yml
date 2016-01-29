@@ -1,0 +1,25 @@
+language: cpp
+
+compiler:
+  - gcc
+  - clang
+
+os:
+  - linux
+
+before_install:
+  - export NUM_THREADS=4
+  - export SCRIPTS=./travis
+
+install:
+  - sudo -E $SCRIPTS/install.sh
+
+before_script:
+  - export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib:/usr/local/cuda/lib64
+
+script: $SCRIPTS/run.sh
+
+notifications:
+  email:
+    on_success: false
+    on_failure: always
