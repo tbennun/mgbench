@@ -50,10 +50,8 @@ endif()
 
 set(CUDA_PROPAGATE_HOST_FLAGS OFF)
 
-if (CMAKE_COMPILER_IS_GNUCXX)
-  # Addresses a bug where code is not compiled as C++11 in non-CUDA code and older g++ versions
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-endif()
+# Addresses a bug where code is not compiled as C++11 in non-CUDA code and older g++ versions
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 
 if (WIN32 AND NOT CYGWIN)
   set(EXTRA_LIBS "")

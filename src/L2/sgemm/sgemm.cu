@@ -267,7 +267,7 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
             if (diff > 1e-3)
             {
                 if (FLAGS_print_diffs)
-                    printf("Difference in index %d, %d: %f != %f\n", i / m, i % m, Cres[i], hostC[i]);
+                    printf("Difference in index %d, %d: %f != %f\n", (int)(i / m), (int)(i % m), Cres[i], hostC[i]);
                 numDiffs++;
             }
             meanDiff += diff;
