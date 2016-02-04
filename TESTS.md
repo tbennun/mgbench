@@ -4,10 +4,21 @@ List of Tests
 Level-1
 -------
 
-* Half-duplex: Tests inter-GPU bandwidth by copying data from each GPU to the rest of the GPUs.
+* Half-duplex: Tests inter-GPU uni-directional bandwidth by copying data from each GPU to the rest of the GPUs.
   * Special flags:
     * `--from`: Specify only one GPU to copy from (or -1 for all GPUs)
     * `--to`: Specify a single target GPU to copy to (or -1 for all GPUs)
+
+* Full-duplex: Tests inter-GPU bi-directional bandwidth by exchanging data between GPUs.
+  * Special flags:
+    * `--from`: Specify only one GPU to copy from (or -1 for all GPUs)
+    * `--to`: Specify a single target GPU to copy to (or -1 for all GPUs)
+
+* UVA: Tests DMA (Direct Memory Access) between each GPU and the host/other GPUs.
+  * Special flags:
+    * `--fullduplex`: Performs exchanges instead of uni-directional transfers
+    * `--from`: Specify only one GPU to copy from (0 for host, 1...N for a specific GPU or -1 for all GPUs)
+    * `--to`: Specify a single target GPU to copy to (1...N for a specific GPU or -1 for all GPUs)
 
 * Scaling: Tests performance degradation as a result of multi-GPU utilization. Runs SGEMM (see Level-2 tests) in a mode that performs the same operation on all GPUs. The time should be roughly the same for any number of GPUs.
 
@@ -28,6 +39,11 @@ Level-2
   * Special flags:
     * `--save_images`: Saves the two images in case the regression test failed (default: true).
 
+
+Miscellaneous
+-------------
+
+* `numgpus`: A simple application that prints the number of available GPUs
 
 
 Test Flags
