@@ -63,8 +63,17 @@ endif()
 
 # Level 1 (microbenchmarks)
 
+cuda_add_executable(numgpus src/L1/numgpus.cpp)
+
 cuda_add_executable(halfduplex src/L1/halfduplex.cpp)
 target_link_libraries(halfduplex gflags-static ${EXTRA_LIBS})
+
+cuda_add_executable(fullduplex src/L1/fullduplex.cpp)
+target_link_libraries(fullduplex gflags-static ${EXTRA_LIBS})
+
+cuda_add_executable(uva src/L1/uva.cu)
+target_link_libraries(uva gflags-static ${EXTRA_LIBS})
+
 
 # Level 2
 

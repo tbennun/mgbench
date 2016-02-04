@@ -27,15 +27,31 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+NUMGPUS=`./build/numgpus`
+echo "Number of GPUs: ${NUMGPUS}"
+if [ $NUMGPUS -eq 0 ]
+then
+    echo "No GPUs found, aborting test."
+    exit 0
+fi
 
 # Run L1 tests
 echo "L1 Tests"
 echo "--------"
 
-echo "1/2 Half-duplex memory copy"
+echo "1/5 Half-duplex (unidirectional) memory copy"
 ./build/halfduplex > l1-halfduplex.log
 
-echo "2/2 Scaling"
+echo "2/5 Full-duplex (bidirectional) memory copy"
+./build/fullduplex > l1-fullduplex.log
+
+echo "3/5 Half-duplex DMA"
+./build/uva > l1-uvahalf.log
+
+echo "4/5 Full-duplex DMA"
+./build/uva --fullduplex > l1-uvafull.log
+
+echo "5/5 Scaling"
 ./build/sgemm -n 4096 -k 4096 -m 4096 --repetitions=100 --regression=false --scaling=true > l1-scaling.log
 
 # Run L2 tests
@@ -45,7 +61,7 @@ echo "--------"
 
 # Matrix multiplication
 echo "1/5 Matrix multiplication (correctness)"
-./build/sgemm -n 4096 -k 4096 -m 4096 --repetitions=100 --regression=true > l2-sgemm-correctness.log
+./build/sgemm -n 1024 -k 1024 -m 1024 --repetitions=100 --regression=true > l2-sgemm-correctness.log
 echo "2/5 Matrix multiplication (performance)"
 ./build/sgemm -n 8192 -k 8192 -m 8192 --repetitions=100 --regression=false > l2-sgemm-perf.log
 
@@ -57,22 +73,14 @@ echo "4/5 Stencil (performance)"
 
 # Test each GPU separately
 echo "5/5 Stencil (single GPU correctness)"
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=0 > l2-gol-single-0.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=1 > l2-gol-single-1.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=2 > l2-gol-single-2.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=3 > l2-gol-single-3.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=4 > l2-gol-single-4.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=5 > l2-gol-single-5.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=6 > l2-gol-single-6.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=7 > l2-gol-single-7.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=8 > l2-gol-single-8.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=9 > l2-gol-single-9.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=10 > l2-gol-single-10.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=11 > l2-gol-single-11.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=12 > l2-gol-single-12.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=13 > l2-gol-single-13.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=14 > l2-gol-single-14.log
-./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=15 > l2-gol-single-15.log
-
+echo "" > l2-gol-single.log
+i=0
+while [ $i -lt $NUMGPUS ]
+do
+    echo "GPU $i" >> l2-gol-single.log
+    echo "===========" >> l2-gol-single.log
+    ./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=$i >> l2-gol-single.log
+    i=`expr $i + 1`
+done
 
 echo "Done!"

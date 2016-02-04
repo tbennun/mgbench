@@ -27,8 +27,6 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-set -e
-
 # Set your custom CUDA path here, if necessary
 # export CUDA_BIN_PATH=/usr/local/cuda-7.0
 

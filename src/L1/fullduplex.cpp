@@ -53,12 +53,19 @@ static void HandleError(const char *file, int line, cudaError_t err)
 void CopySegment(int a, int b)
 {
     void *deva_buff = nullptr, *devb_buff = nullptr;
+    void *deva_buff2 = nullptr, *devb_buff2 = nullptr;
+
+    cudaStream_t a_stream, b_stream;
 
     // Allocate buffers
     CUDA_CHECK(cudaSetDevice(a));
-    CUDA_CHECK(cudaMalloc(&deva_buff, FLAGS_size));    
+    CUDA_CHECK(cudaMalloc(&deva_buff, FLAGS_size));
+    CUDA_CHECK(cudaMalloc(&deva_buff2, FLAGS_size));
+    CUDA_CHECK(cudaStreamCreateWithFlags(&a_stream, cudaStreamNonBlocking));
     CUDA_CHECK(cudaSetDevice(b));
     CUDA_CHECK(cudaMalloc(&devb_buff, FLAGS_size));
+    CUDA_CHECK(cudaMalloc(&devb_buff2, FLAGS_size));
+    CUDA_CHECK(cudaStreamCreateWithFlags(&b_stream, cudaStreamNonBlocking));
 
     // Synchronize devices before copying
     CUDA_CHECK(cudaSetDevice(a));
@@ -66,12 +73,16 @@ void CopySegment(int a, int b)
     CUDA_CHECK(cudaSetDevice(b));
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    // Copy
+    
+    
+    // Exchange
     auto t1 = std::chrono::high_resolution_clock::now();
     for(uint64_t i = 0; i < FLAGS_repetitions; ++i)
     {
         CUDA_CHECK(cudaMemcpyPeerAsync(devb_buff, b, deva_buff, a,
-                                       FLAGS_size));
+                                       FLAGS_size, b_stream));
+        CUDA_CHECK(cudaMemcpyPeerAsync(deva_buff2, a, devb_buff2, b,
+                                       FLAGS_size, a_stream));
     }
     CUDA_CHECK(cudaSetDevice(a));
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -89,8 +100,12 @@ void CopySegment(int a, int b)
     // Free buffers
     CUDA_CHECK(cudaSetDevice(a));
     CUDA_CHECK(cudaFree(deva_buff));
+    CUDA_CHECK(cudaFree(deva_buff2));
+    CUDA_CHECK(cudaStreamDestroy(a_stream));
     CUDA_CHECK(cudaSetDevice(b));
     CUDA_CHECK(cudaFree(devb_buff));
+    CUDA_CHECK(cudaFree(devb_buff2));
+    CUDA_CHECK(cudaStreamDestroy(b_stream));
 }
 
 
@@ -98,7 +113,7 @@ int main(int argc, char **argv)
 {
     gflags::ParseCommandLineFlags(&argc, &argv, true);
     
-    printf("Inter-GPU uni-directional memory transfer test\n");
+    printf("Inter-GPU bi-directional memory exhange test\n");
     
     int ndevs = 0;
     CUDA_CHECK(cudaGetDeviceCount(&ndevs));
@@ -136,7 +151,7 @@ int main(int argc, char **argv)
         if(FLAGS_from >= 0 && i != FLAGS_from)
             continue;
         
-        for(int j = 0; j < ndevs; ++j)
+        for(int j = i; j < ndevs; ++j)
         {
             // Skip self-copies
             if(i == j)
@@ -145,7 +160,7 @@ int main(int argc, char **argv)
             if(FLAGS_to >= 0 && j != FLAGS_to)
                 continue;
 
-            printf("Copying from GPU %d to GPU %d: ", i, j);
+            printf("Exchanging between GPU %d and GPU %d: ", i, j);
 
             CopySegment(i, j);
         }
