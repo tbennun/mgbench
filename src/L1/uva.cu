@@ -269,8 +269,8 @@ int main(int argc, char **argv)
 
     printf("GPUs: %d (+ host)\n", ndevs);
     printf("Data size: %.2f MB\n", (FLAGS_size / 1024.0f / 1024.0f));
-    printf("Data type size: %d bytes\n", (FLAGS_type_size));
-    printf("Block size: %d\n", (FLAGS_block_size));
+    printf("Data type size: %d bytes\n", (int)FLAGS_type_size);
+    printf("Block size: %d\n", (int)FLAGS_block_size);
     printf("Repetitions: %d\n", (int)FLAGS_repetitions);
     printf("\n");
     
