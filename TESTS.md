@@ -17,6 +17,7 @@ Level-1
 * UVA: Tests DMA (Direct Memory Access) between each GPU and the host/other GPUs.
   * Special flags:
     * `--fullduplex`: Performs exchanges instead of uni-directional transfers
+    * `--write`: Performs DMA write instead of read
     * `--from`: Specify only one GPU to copy from (0 for host, 1...N for a specific GPU or -1 for all GPUs)
     * `--to`: Specify a single target GPU to copy to (1...N for a specific GPU or -1 for all GPUs)
 

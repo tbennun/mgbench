@@ -41,6 +41,7 @@ DEFINE_uint64(type_size, sizeof(float), "The size of the data chunk to "
 DEFINE_uint64(repetitions, 100, "Number of repetitions to average");
 DEFINE_uint64(block_size, 32, "Copy kernel block size");
 DEFINE_bool(fullduplex, false, "True for bi-directional copy");
+DEFINE_bool(write, false, "Perform DMA write instead of read");
 
 DEFINE_int32(from, -1, "Only copy from a single GPU index/host (Host is "
              "0, GPUs start from 1), or -1 for all");
@@ -144,7 +145,13 @@ void CopySegmentUVA(int a, int b)
     size_t sz = FLAGS_size / FLAGS_type_size, typesize = FLAGS_type_size;
     dim3 block_dim (FLAGS_block_size),
          grid_dim((sz + FLAGS_block_size - 1) / FLAGS_block_size);
-    
+
+    // If using UVA to write, simply swap the buffers
+    if (FLAGS_write)
+    {
+        std::swap(deva_buff, devb_buff);
+        std::swap(deva_buff2, devb_buff2);
+    }
     
     // Copy or Exchange using UVA
     auto t1 = std::chrono::high_resolution_clock::now();
@@ -182,6 +189,15 @@ void CopySegmentUVA(int a, int b)
     double MBps = (FLAGS_size / 1024.0 / 1024.0) / (mstime / 1000.0);
     
     printf("%.2lf MB/s (%lf ms)\n", MBps, mstime);
+
+
+    // Swap buffers back, if necessary
+    if (FLAGS_write)
+    {
+        std::swap(deva_buff, devb_buff);
+        std::swap(deva_buff2, devb_buff2);
+    }
+    
     
     // Free buffers
     if (a > 0)
@@ -283,17 +299,24 @@ int main(int argc, char **argv)
                 
             if (FLAGS_fullduplex)
             {
-                if (i == 0)
-                    printf("Exchanging between host and GPU %d: ", j - 1);
-                else
-                    printf("Exchanging between GPU %d and GPU %d: ", i - 1, j - 1);
+                printf("Exchanging between GPU %d and GPU %d: ", i - 1, j - 1);
             }
             else
             {
-                if (i == 0)
-                    printf("Copying from host to GPU %d: ", j - 1);
+                if (!FLAGS_write)
+                {
+                    if (i == 0)
+                        printf("Copying from host to GPU %d: ", j - 1);
+                    else
+                        printf("Copying from GPU %d to GPU %d: ", i - 1, j - 1);
+                }
                 else
-                    printf("Copying from GPU %d to GPU %d: ", i - 1, j - 1);
+                {
+                    if (i == 0)
+                        printf("Copying from GPU %d to host: ", j - 1);
+                    else
+                        printf("Copying from GPU %d to GPU %d: ", j - 1, i - 1);
+                }
             }
 
             // Make sure that DMA access is possible

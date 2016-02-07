@@ -39,19 +39,25 @@ fi
 echo "L1 Tests"
 echo "--------"
 
-echo "1/5 Half-duplex (unidirectional) memory copy"
+echo "1/7 Half-duplex (unidirectional) memory copy"
 ./build/halfduplex > l1-halfduplex.log
 
-echo "2/5 Full-duplex (bidirectional) memory copy"
+echo "2/7 Full-duplex (bidirectional) memory copy"
 ./build/fullduplex > l1-fullduplex.log
 
-echo "3/5 Half-duplex DMA"
+echo "3/7 Half-duplex DMA Read"
 ./build/uva > l1-uvahalf.log
 
-echo "4/5 Full-duplex DMA"
+echo "4/7 Full-duplex DMA Read"
 ./build/uva --fullduplex > l1-uvafull.log
 
-echo "5/5 Scaling"
+echo "5/7 Half-duplex DMA Write"
+./build/uva --write > l1-uvawhalf.log
+
+echo "6/7 Full-duplex DMA Write"
+./build/uva --write --fullduplex > l1-uvawfull.log
+
+echo "7/7 Scaling"
 ./build/sgemm -n 4096 -k 4096 -m 4096 --repetitions=100 --regression=false --scaling=true > l1-scaling.log
 
 # Run L2 tests
