@@ -62,7 +62,9 @@ DEFINE_bool(print_diffs, false, "Print each difference");
 DEFINE_int32(random_seed, -1, "Override random seed (default is current time)");
 unsigned int curtime = (unsigned int)time(NULL);
 
-DEFINE_int32(repetitions, 50, "Number of repetitions for test");
+DEFINE_int32(repetitions, 10, "Number of repetitions for test");
+DEFINE_uint64(heat, 0, "Run for a specified amount of seconds instead of "
+              "repetitions");
 
 DEFINE_int32(gpuoffset, 0, "Offset the first used GPU ID");
 DEFINE_bool(scaling, false, "Scaling test mode");
@@ -189,18 +191,19 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
     if (!FLAGS_scaling)
     {
         maps::multi::AnalyzeCall(sched, dim3(), dim3(), 
-                                 maps::multi::Block2DUnmodified<true, float>(A),
-                                 maps::multi::Block2DUnmodified<false, float>(B),                             
-                                 maps::multi::StructuredInjectiveMatrixO<float>(C));
+            maps::multi::Block2DUnmodified<true, float>(A),
+            maps::multi::Block2DUnmodified<false, float>(B),
+            maps::multi::StructuredInjectiveMatrixO<float>(C));
     }
     else
     {
-        maps::multi::AnalyzeCall(sched, dim3(), dim3(), 
-                                 maps::multi::Block2DUnmodified<true, float>(A),
-                                 maps::multi::Block2DUnmodified<false, float>(B),                             
-                                 maps::multi::StructuredInjectiveMatrixO<float>(C));
-    }
+        maps::multi::AnalyzeCallAll(sched, dim3(), dim3(), 
+            maps::multi::Block2DUnmodified<true, float>(A),
+            maps::multi::Block2DUnmodified<false, float>(B),
+            maps::multi::StructuredInjectiveMatrixO<float>(C));
 
+    }
+    
     for (int i = 0; i < num_gpus; i++)
     {
         MAPS_CUDA_CHECK(cudaSetDevice(i));
@@ -208,48 +211,57 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
     }
     MAPS_CUDA_CHECK(cudaSetDevice(0));    
     auto t1 = std::chrono::high_resolution_clock::now();
+    auto t2 = std::chrono::high_resolution_clock::now();
 
-    if (!FLAGS_scaling)
-    {    
-        // Invoke the kernels
-        for (int i = 0; i < FLAGS_repetitions; ++i)
-        {
-            sched.InvokeUnmodified(SGEMMRoutine, &context, dim3(),
-                                   maps::multi::Block2DUnmodified<true, float>(A),
-                                   maps::multi::Block2DUnmodified<false, float>(B),
-                                   maps::multi::StructuredInjectiveMatrixO<float>(C),
-                                   alpha, beta);
+    do
+    {
+        if (!FLAGS_scaling)
+        {    
+            // Invoke the kernels
+            for (int i = 0; i < FLAGS_repetitions; ++i)
+            {
+                sched.InvokeUnmodified(SGEMMRoutine, &context, dim3(),
+                                       maps::multi::Block2DUnmodified<true, float>(A),
+                                       maps::multi::Block2DUnmodified<false, float>(B),
+                                       maps::multi::StructuredInjectiveMatrixO<float>(C),
+                                       alpha, beta);
+            }
         }
+        else
+        {
+            // Invoke the kernels
+            for (int i = 0; i < FLAGS_repetitions; ++i)
+            {
+                sched.InvokeAllUnmodified(SGEMMRoutine, &context, dim3(),
+                                          maps::multi::Block2DUnmodified<true, float>(A),
+                                          maps::multi::Block2DUnmodified<false, float>(B),
+                                          maps::multi::StructuredInjectiveMatrixO<float>(C),
+                                          alpha, beta);
+            }        
+        }
+        
+        sched.WaitAll();
+        for (int i = 0; i < num_gpus; i++)
+        {
+            MAPS_CUDA_CHECK(cudaSetDevice(i));
+            MAPS_CUDA_CHECK(cudaDeviceSynchronize());
+        }
+        t2 = std::chrono::high_resolution_clock::now();
+        
+    } while ((FLAGS_heat > 0) &&
+             (std::chrono::duration_cast<std::chrono::seconds>(t2 - t1).count() < FLAGS_heat));
+
+    if (FLAGS_heat == 0)
+    {
+        printf("SGEMM - MAPS (unmodified routine): %f ms\n", 
+               std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0f / FLAGS_repetitions);
     }
     else
     {
-        // Invoke the kernels
-        for (int i = 0; i < FLAGS_repetitions; ++i)
-        {
-            sched.InvokeAllUnmodified(SGEMMRoutine, &context, dim3(),
-                                      maps::multi::Block2DUnmodified<true, float>(A),
-                                      maps::multi::Block2DUnmodified<false, float>(B),
-                                      maps::multi::StructuredInjectiveMatrixO<float>(C),
-                                      alpha, beta);
-        }        
+        printf("SGEMM successfully ran for %f seconds\n",
+               std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() * 1e-6);
     }
-    
-    sched.WaitAll();
-    for (int i = 0; i < num_gpus; i++)
-    {
-        MAPS_CUDA_CHECK(cudaSetDevice(i));
-        MAPS_CUDA_CHECK(cudaDeviceSynchronize());
-    }
-    auto t2 = std::chrono::high_resolution_clock::now();
-
-    printf("SGEMM - MAPS (unmodified routine): %f ms\n", 
-           std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0f / FLAGS_repetitions);
        
-    // Gather back to host
-    C.Bind(&Cres[0]);
-    maps::multi::Gather(sched, C);
-
-
     bool result = true;
 
     // Regression
@@ -258,6 +270,10 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
         float meanDiff = 0.0f;
         int numDiffs = 0;
 
+        // Gather back to host
+        C.Bind(&Cres[0]);
+        maps::multi::Gather(sched, C);
+        
         std::vector<float> hostC(m * k, 0);
         simple_sgemm(m, n, k, alpha, &hostA[0], &hostB[0], beta, &hostC[0]);
 

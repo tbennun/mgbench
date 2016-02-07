@@ -35,7 +35,53 @@ then
     exit 0
 fi
 
+#######################################
+# Find nvidia-smi for temperature tests
+TEMPTEST=0
+NVSMI=`which nvidia-smi`
+if ! [ -x "$NVSMI" ]
+then
+    NVSMI=`find /usr/local -name 'nvidia-smi' 2> /dev/null`
+    if ! [ -x "$NVSMI" ]
+    then
+        NVSMI=`find -L /etc -name 'nvidia-smi' 2> /dev/null`
+        if ! [ -x "$NVSMI" ]
+        then
+            echo "WARNING: nvidia-smi not found"
+        else
+            TEMPTEST=1
+        fi
+    else
+        TEMPTEST=1
+    fi
+else
+    TEMPTEST=1
+fi
+
+if [ $TEMPTEST -eq 1 ]
+then
+    echo "Found nvidia-smi at ${NVSMI}"
+fi
+#######################################
+
+
+# Run L0 diagnostics
+echo ""
+echo "L0 diagnostics"
+echo "--------------"
+
+echo "1/2 Computer information"
+echo "CPU Info:" > l0-info.log
+cat /proc/cpuinfo >> l0-info.log
+echo "Memory Info:" >> l0-info.log
+cat /proc/meminfo >> l0-info.log
+
+echo "2/2 Device information"
+./build/devinfo > l0-devices.log
+
+
 # Run L1 tests
+echo ""
 echo "L1 Tests"
 echo "--------"
 
@@ -58,7 +104,7 @@ echo "6/7 Full-duplex DMA Write"
 ./build/uva --write --fullduplex > l1-uvawfull.log
 
 echo "7/7 Scaling"
-./build/sgemm -n 4096 -k 4096 -m 4096 --repetitions=100 --regression=false --scaling=true > l1-scaling.log
+./build/sgemm -n 4096 -k 4096 -m 4096 --repetitions=100 --regression=false --scaling > l1-scaling.log
 
 # Run L2 tests
 echo ""
@@ -66,19 +112,19 @@ echo "L2 Tests"
 echo "--------"
 
 # Matrix multiplication
-echo "1/5 Matrix multiplication (correctness)"
+echo "1/6 Matrix multiplication (correctness)"
 ./build/sgemm -n 1024 -k 1024 -m 1024 --repetitions=100 --regression=true > l2-sgemm-correctness.log
-echo "2/5 Matrix multiplication (performance)"
+echo "2/6 Matrix multiplication (performance)"
 ./build/sgemm -n 8192 -k 8192 -m 8192 --repetitions=100 --regression=false > l2-sgemm-perf.log
 
 # Stencil operator
-echo "3/5 Stencil (correctness)"
+echo "3/6 Stencil (correctness)"
 ./build/gol --repetitions=5 --regression=true > l2-gol-correctness.log
-echo "4/5 Stencil (performance)"
+echo "4/6 Stencil (performance)"
 ./build/gol --repetitions=1000 --regression=false > l2-gol-perf.log
 
 # Test each GPU separately
-echo "5/5 Stencil (single GPU correctness)"
+echo "5/6 Stencil (single GPU correctness)"
 echo "" > l2-gol-single.log
 i=0
 while [ $i -lt $NUMGPUS ]
@@ -88,5 +134,45 @@ do
     ./build/gol --num_gpus=1 --repetitions=5 --regression=true --gpuoffset=$i >> l2-gol-single.log
     i=`expr $i + 1`
 done
+
+
+# Temperature test
+if [ $TEMPTEST -eq 1 ]
+then
+    echo "6/6 Cooling"
+
+    # Measure initial temperature
+    echo "Initial temp: " > l2-cooling.log
+    $NVSMI -q -d TEMPERATURE | grep Current | awk '{print $(NF-1)}' | tr '\n' ' ' >> l2-cooling.log
+    echo "" >> l2-cooling.log
+
+    # Wait 1 minute, measure again
+    sleep 300
+    echo "Temp after 5min: " >> l2-cooling.log
+    $NVSMI -q -d TEMPERATURE | grep Current | awk '{print $(NF-1)}' | tr '\n' ' ' >> l2-cooling.log
+    echo "" >> l2-cooling.log
+
+    # Heat, measure temperature right after application
+    ./build/sgemm --heat=60 --regression=false --startwith=$NUMGPUS >> l2-cooling.log
+    echo "Temp after heat: " >> l2-cooling.log
+    $NVSMI -q -d TEMPERATURE | grep Current | awk '{print $(NF-1)}' | tr '\n' ' ' >> l2-cooling.log
+    echo "" >> l2-cooling.log
+
+    # Cool for 1 minute, measure again
+    sleep 60
+    echo "Temp after 1min: " >> l2-cooling.log
+    $NVSMI -q -d TEMPERATURE | grep Current | awk '{print $(NF-1)}' | tr '\n' ' ' >> l2-cooling.log
+    echo "" >> l2-cooling.log
+
+    # Cool for 4 more minutes, measure again
+    sleep 240
+    echo "Temp after 5min: " >> l2-cooling.log
+    $NVSMI -q -d TEMPERATURE | grep Current | awk '{print $(NF-1)}' | tr '\n' ' ' >> l2-cooling.log
+    echo "" >> l2-cooling.log
+
+else
+    echo "6/6 Cooling -- SKIPPED"
+    echo "SKIPPED" > l2-cooling.log
+fi
 
 echo "Done!"

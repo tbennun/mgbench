@@ -37,8 +37,10 @@
 DEFINE_uint64(size, 100*1024*1024, "The amount of data to transfer");
 DEFINE_uint64(repetitions, 100, "Number of repetitions to average");
 
-DEFINE_int32(from, -1, "Only copy from a single GPU index, or -1 for all");
-DEFINE_int32(to, -1, "Only copy to a single GPU index, or -1 for all");
+DEFINE_int32(from, -1, "Only copy from a single GPU index/host (Host is "
+             "0, GPUs start from 1), or -1 for all");
+DEFINE_int32(to, -1, "Only copy to a single GPU index/host (Host is "
+             "0, GPUs start from 1), or -1 for all");
 
 static void HandleError(const char *file, int line, cudaError_t err)
 {
@@ -93,6 +95,51 @@ void CopySegment(int a, int b)
     CUDA_CHECK(cudaFree(devb_buff));
 }
 
+void CopyHostDevice(int dev, bool d2h)
+{
+    void *dev_buff = nullptr, *host_buff = nullptr;
+
+    // Allocate buffers
+    CUDA_CHECK(cudaSetDevice(dev));
+    CUDA_CHECK(cudaMalloc(&dev_buff, FLAGS_size));    
+    CUDA_CHECK(cudaMallocHost(&host_buff, FLAGS_size));
+
+    // Synchronize devices before copying
+    CUDA_CHECK(cudaSetDevice(dev));
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // Copy
+    auto t1 = std::chrono::high_resolution_clock::now();
+    for(uint64_t i = 0; i < FLAGS_repetitions; ++i)
+    {
+        if (d2h)
+        {
+            CUDA_CHECK(cudaMemcpyAsync(host_buff, dev_buff,
+                                       FLAGS_size, cudaMemcpyDeviceToHost));
+        }
+        else
+        {
+            CUDA_CHECK(cudaMemcpyAsync(dev_buff, host_buff,
+                                       FLAGS_size, cudaMemcpyHostToDevice));
+        }
+    }
+    CUDA_CHECK(cudaSetDevice(dev));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    auto t2 = std::chrono::high_resolution_clock::now();
+
+    double mstime = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0 / FLAGS_repetitions;
+
+    // MiB/s = [bytes / (1024^2)] / [ms / 1000]
+    double MBps = (FLAGS_size / 1024.0 / 1024.0) / (mstime / 1000.0);
+    
+    printf("%.2lf MB/s (%lf ms)\n", MBps, mstime);
+    
+    // Free buffers
+    CUDA_CHECK(cudaSetDevice(dev));
+    CUDA_CHECK(cudaFree(dev_buff));
+    CUDA_CHECK(cudaFreeHost(host_buff));
+}
+
 
 int main(int argc, char **argv)
 {
@@ -103,12 +150,12 @@ int main(int argc, char **argv)
     int ndevs = 0;
     CUDA_CHECK(cudaGetDeviceCount(&ndevs));
 
-    if (FLAGS_from >= ndevs)
+    if (FLAGS_from >= (ndevs + 1))
     {
         printf("Invalid --from flag. Only %d GPUs are available.\n", ndevs);
         return 1;
     }
-    if (FLAGS_to >= ndevs)
+    if (FLAGS_to >= (ndevs + 1))
     {
         printf("Invalid --to flag. Only %d GPUs are available.\n", ndevs);
         return 2;
@@ -130,13 +177,13 @@ int main(int argc, char **argv)
     printf("Repetitions: %d\n", (int)FLAGS_repetitions);
     printf("\n");
     
-    for(int i = 0; i < ndevs; ++i)
+    for(int i = 0; i < ndevs + 1; ++i)
     {
         // Skip source GPUs
         if(FLAGS_from >= 0 && i != FLAGS_from)
             continue;
         
-        for(int j = 0; j < ndevs; ++j)
+        for(int j = 0; j < ndevs + 1; ++j)
         {
             // Skip self-copies
             if(i == j)
@@ -145,9 +192,21 @@ int main(int argc, char **argv)
             if(FLAGS_to >= 0 && j != FLAGS_to)
                 continue;
 
-            printf("Copying from GPU %d to GPU %d: ", i, j);
-
-            CopySegment(i, j);
+            if (i != 0 && j != 0)
+            {
+                printf("Copying from GPU %d to GPU %d: ", i - 1, j - 1);
+                CopySegment(i - 1, j - 1);
+            }
+            else if (i == 0 && j != 0)
+            {
+                printf("Copying from host to GPU %d: ", j - 1);
+                CopyHostDevice(j - 1, false);
+            }
+            else if (i != 0 && j == 0)
+            {
+                printf("Copying from GPU %d to host: ", i - 1);
+                CopyHostDevice(i - 1, true);
+            }
         }
     }
 

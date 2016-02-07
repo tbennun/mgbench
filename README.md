@@ -5,7 +5,7 @@ MGBench: Multi-GPU Computing Benchmark Suite
 
 This set of applications test the performance, bus speed, power efficiency and correctness of a multi-GPU node.
 
-It is comprised of Level-1 tests (microbenchmarks) and Level-2 tests (micro-applications).
+It is comprised of Level-0 tests (diagnostic utilities), Level-1 tests (microbenchmarks), and Level-2 tests (micro-applications).
 
 Requirements
 ------------

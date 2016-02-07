@@ -1,13 +1,21 @@
 List of Tests
 =============
 
+Level-0
+-------
+
+* `numgpus`: Returns the number of available GPUs.
+
+* `devinfo`: Returns information regarding each device and the DMA access between them.
+
+
 Level-1
 -------
 
-* Half-duplex: Tests inter-GPU uni-directional bandwidth by copying data from each GPU to the rest of the GPUs.
+* Half-duplex: Tests uni-directional bandwidth by copying data from each GPU to the host/other GPUs.
   * Special flags:
-    * `--from`: Specify only one GPU to copy from (or -1 for all GPUs)
-    * `--to`: Specify a single target GPU to copy to (or -1 for all GPUs)
+    * `--from`: Specify only one GPU to copy from (0 for host, 1...N for a specific GPU or -1 for all GPUs)
+    * `--to`: Specify a single target GPU to copy to (0 for host, 1...N for a specific GPU or -1 for all GPUs)
 
 * Full-duplex: Tests inter-GPU bi-directional bandwidth by exchanging data between GPUs.
   * Special flags:
@@ -31,6 +39,9 @@ Level-2
   * Modes:
     * Correctness: Runs SGEMM with CPU regression for a small amount of iterations to verify the results.
     * Performance: Runs SGEMM without regression, averaging multiplication time over a large amount of repetitions to obtain accurate performance. Scaling should be near-linear.
+    * Cooling: Runs SGEMM for a specified amount of seconds in order to heat the GPUs.
+  * Special flags:
+    * `heat`: Specifies the number of seconds (instead of repetitions) to run SGEMM kernels consecutively, thereby heating the GPU(s).
 
 * Game of Life (gol): Simple stencil operator that tests multi-GPU correctness as well as inter-GPU communications.
   * Modes:
@@ -39,13 +50,6 @@ Level-2
     * Single-GPU: Runs GoL with regression tests on each of the GPUs separately, pinpointing faulty devices.
   * Special flags:
     * `--save_images`: Saves the two images in case the regression test failed (default: true).
-
-
-Miscellaneous
--------------
-
-* `numgpus`: A simple application that prints the number of available GPUs
-
 
 Test Flags
 ----------
