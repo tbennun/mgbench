@@ -146,7 +146,7 @@ then
     $NVSMI -q -d TEMPERATURE | grep Current | awk '{print $(NF-1)}' | tr '\n' ' ' >> l2-cooling.log
     echo "" >> l2-cooling.log
 
-    # Wait 1 minute, measure again
+    # Wait 5 minutes, measure again
     sleep 300
     echo "Temp after 5min: " >> l2-cooling.log
     $NVSMI -q -d TEMPERATURE | grep Current | awk '{print $(NF-1)}' | tr '\n' ' ' >> l2-cooling.log
