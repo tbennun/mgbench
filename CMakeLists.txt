@@ -77,6 +77,8 @@ target_link_libraries(fullduplex gflags-static ${EXTRA_LIBS})
 cuda_add_executable(uva src/L1/uva.cu)
 target_link_libraries(uva gflags-static ${EXTRA_LIBS})
 
+cuda_add_executable(scatter src/L1/scatter.cpp)
+target_link_libraries(scatter gflags-static ${EXTRA_LIBS})
 
 # Level 2 (micro-applications)
 

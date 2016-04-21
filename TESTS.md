@@ -29,6 +29,8 @@ Level-1
     * `--from`: Specify only one GPU to copy from (0 for host, 1...N for a specific GPU or -1 for all GPUs)
     * `--to`: Specify a single target GPU to copy to (1...N for a specific GPU or -1 for all GPUs)
 
+* Scatter: Tests concurrent copies to/from all GPU devices at once.
+
 * Scaling: Tests performance degradation as a result of multi-GPU utilization. Runs SGEMM (see Level-2 tests) in a mode that performs the same operation on all GPUs. The time should be roughly the same for any number of GPUs.
 
 
