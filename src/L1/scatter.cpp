@@ -39,6 +39,7 @@
 
 DEFINE_uint64(size, 100*1024*1024, "The amount of data to transfer");
 DEFINE_uint64(repetitions, 100, "Number of repetitions to average");
+DEFINE_int32(source, -1, "Source to scatter from/gather to (-1 for host)");
 
 static void HandleError(const char *file, int line, cudaError_t err)
 {
@@ -50,17 +51,38 @@ static void HandleError(const char *file, int line, cudaError_t err)
 // CUDA assertions
 #define CUDA_CHECK(err) do { cudaError_t errr = (err); if(errr != cudaSuccess) { HandleError(__FILE__, __LINE__, errr); } } while(0)
 
-double CopyHostDevice(int dev, bool d2h, maps::multi::Barrier *bar)
+double Copy(int dst_dev, int src_dev, maps::multi::Barrier *bar)
 {
-    void *dev_buff = nullptr, *host_buff = nullptr;
-
+    void *dst_buff = nullptr, *src_buff = nullptr;
+    cudaStream_t stream;
+    
     // Allocate buffers
-    CUDA_CHECK(cudaSetDevice(dev));
-    CUDA_CHECK(cudaMalloc(&dev_buff, FLAGS_size));    
-    CUDA_CHECK(cudaMallocHost(&host_buff, FLAGS_size));
-
+    if (src_dev >= 0)
+    {
+        CUDA_CHECK(cudaSetDevice(src_dev));
+        CUDA_CHECK(cudaMalloc(&src_buff, FLAGS_size));
+    }
+    else
+    {
+        CUDA_CHECK(cudaMallocHost(&src_buff, FLAGS_size));
+    }
+    if (dst_dev >= 0)
+    {
+        CUDA_CHECK(cudaSetDevice(dst_dev));
+        CUDA_CHECK(cudaMalloc(&dst_buff, FLAGS_size));
+    }
+    else
+    {
+        CUDA_CHECK(cudaMallocHost(&dst_buff, FLAGS_size));
+    }
+    
     // Synchronize devices before copying
+    int dev = (dst_dev >= 0) ? dst_dev : src_dev;
     CUDA_CHECK(cudaSetDevice(dev));
+    
+    // Create stream
+    CUDA_CHECK(cudaStreamCreate(&stream));
+
     CUDA_CHECK(cudaDeviceSynchronize());
     bar->Sync();
 
@@ -68,15 +90,22 @@ double CopyHostDevice(int dev, bool d2h, maps::multi::Barrier *bar)
     auto t1 = std::chrono::high_resolution_clock::now();
     for(uint64_t i = 0; i < FLAGS_repetitions; ++i)
     {
-        if (d2h)
+        if (dst_dev < 0)
         {
-            CUDA_CHECK(cudaMemcpyAsync(host_buff, dev_buff,
-                                       FLAGS_size, cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpyAsync(dst_buff, src_buff,
+                                       FLAGS_size, cudaMemcpyDeviceToHost,
+                                       stream));
+        }
+        else if (src_dev < 0)
+        {
+            CUDA_CHECK(cudaMemcpyAsync(dst_buff, src_buff,
+                                       FLAGS_size, cudaMemcpyHostToDevice,
+                                       stream));
         }
         else
         {
-            CUDA_CHECK(cudaMemcpyAsync(dev_buff, host_buff,
-                                       FLAGS_size, cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMemcpyPeerAsync(dst_buff, dst_dev, src_buff, src_dev,
+                                           FLAGS_size, stream));
         }
     }
     CUDA_CHECK(cudaSetDevice(dev));
@@ -86,20 +115,41 @@ double CopyHostDevice(int dev, bool d2h, maps::multi::Barrier *bar)
     double mstime = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0 / FLAGS_repetitions;
     
     // Free buffers
-    CUDA_CHECK(cudaSetDevice(dev));
-    CUDA_CHECK(cudaFree(dev_buff));
-    CUDA_CHECK(cudaFreeHost(host_buff));
+    if (src_dev >= 0)
+    {
+        CUDA_CHECK(cudaSetDevice(src_dev));
+        CUDA_CHECK(cudaFree(src_buff));
+    }
+    else
+    {
+        CUDA_CHECK(cudaFreeHost(src_buff));
+    }
+    if (dst_dev >= 0)
+    {
+        CUDA_CHECK(cudaSetDevice(dst_dev));
+        CUDA_CHECK(cudaFree(dst_buff));
+    }
+    else
+    {
+        CUDA_CHECK(cudaFreeHost(dst_buff));
+    }
+
+    // Free stream
+    CUDA_CHECK(cudaStreamDestroy(stream));
 
     return mstime;
 }
 
-void ScatterGatherDeviceThread(int device_id, maps::multi::Barrier *bar,
+void ScatterGatherDeviceThread(int device_id, int src_device,
+                               maps::multi::Barrier *bar,
                                std::vector<double> *results)
 {
-    results->at(device_id) = CopyHostDevice(device_id, false, bar); // Scatter test
+    // Scatter test
+    results->at(device_id) = Copy(device_id, src_device, bar); 
     bar->Sync();
-    
-    results->at(device_id) = CopyHostDevice(device_id, true, bar);  // Gather test
+
+    // Gather test
+    results->at(device_id) = Copy(src_device, device_id, bar);  
     bar->Sync();
 }
 
@@ -142,6 +192,12 @@ int main(int argc, char **argv)
     if (ndevs == 0)
         return 0;
 
+    if (FLAGS_source < -1 || FLAGS_source >= ndevs)
+    {
+        printf("ERROR: Invalid device ID given (%d)\n", FLAGS_source);
+        return 1;
+    }
+
     std::vector<std::thread> threads;
     maps::multi::Barrier bar (ndevs + 1);
     std::vector<double> results (ndevs, 0.0);
@@ -149,10 +205,19 @@ int main(int argc, char **argv)
 
     // Create threads
     for (int i = 0; i < ndevs; ++i)
-        threads.push_back(std::thread(ScatterGatherDeviceThread, i, &bar, &results));
+        threads.push_back(std::thread(ScatterGatherDeviceThread, i,
+                                      FLAGS_source,
+                                      &bar, &results));
+
+    // Set up print string
+    char source[256] = {0};
+    if(FLAGS_source < 0)
+        snprintf(source, 256, "Host");
+    else
+        snprintf(source, 256, "GPU %d", FLAGS_source);
     
     // Scatter test
-    printf("Scatter (host to all GPUs): ");
+    printf("Scatter (%s to all GPUs): ", source);
     bar.Sync();
     bar.Sync();
     AvgMin(results, avg_result, min_result);
@@ -164,7 +229,7 @@ int main(int argc, char **argv)
     printf("\n");
 
     // Gather test
-    printf("Gather (all GPUs to host): ");
+    printf("Gather (all GPUs to %s): ", source);
     bar.Sync();
     bar.Sync();
     AvgMin(results, avg_result, min_result);
