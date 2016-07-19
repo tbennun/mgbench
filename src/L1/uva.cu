@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <map>
+#include <random>
 
 #include <gflags/gflags.h>
 
@@ -42,6 +43,7 @@ DEFINE_uint64(repetitions, 100, "Number of repetitions to average");
 DEFINE_uint64(block_size, 32, "Copy kernel block size");
 DEFINE_bool(fullduplex, false, "True for bi-directional copy");
 DEFINE_bool(write, false, "Perform DMA write instead of read");
+DEFINE_bool(random, false, "Use random access instead of coalesced");
 
 DEFINE_int32(from, -1, "Only copy from a single GPU index/host (Host is "
              "0, GPUs start from 1), or -1 for all");
@@ -67,6 +69,19 @@ __global__ void CopyKernel(T *dst_data, const T *src_data, int size)
         return;
     
     dst_data[idx] = src_data[idx];
+}
+
+template<typename T, bool WRITE>
+__global__ void CopyKernelRandom(T *dst_data, const T *src_data, const int *indices, int size)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= size)
+        return;
+
+    if (WRITE)
+        dst_data[indices[idx]] = src_data[idx];
+    else
+        dst_data[idx] = src_data[indices[idx]];
 }
 
 inline void DispatchCopy(void *dst, const void *src, const size_t& sz, const size_t& type_size,
@@ -97,13 +112,47 @@ inline void DispatchCopy(void *dst, const void *src, const size_t& sz, const siz
     }
 }
 
+template <bool WRITE>
+inline void DispatchCopyRandom(void *dst, const void *src, const int *rnd,
+                               const size_t& sz, const size_t& type_size,
+                               const dim3& grid, const dim3& block, cudaStream_t stream)
+{
+    switch (type_size)
+    {
+      case 1: // sizeof(char)
+          CopyKernelRandom<char, WRITE><<<grid, block, 0, stream>>>((char *)dst, (const char *)src, rnd, sz);
+          return;
+          
+      case 2: // sizeof(short)
+          CopyKernelRandom<short, WRITE><<<grid, block, 0, stream>>>((short *)dst, (const short *)src, rnd, sz);
+          return;
+
+      default:
+      case 4: // sizeof(float)
+          CopyKernelRandom<float, WRITE><<<grid, block, 0, stream>>>((float *)dst, (const float *)src, rnd, sz);
+          return;
+          
+      case 8: // sizeof(double)
+          CopyKernelRandom<double, WRITE><<<grid, block, 0, stream>>>((double *)dst, (const double *)src, rnd, sz);
+          return;
+
+      case 16: // sizeof(float4)
+          CopyKernelRandom<float4, WRITE><<<grid, block, 0, stream>>>((float4 *)dst, (const float4 *)src, rnd, sz);
+          return;
+    }
+}
+
+
 void CopySegmentUVA(int a, int b)
 {
     void *deva_buff = nullptr, *devb_buff = nullptr;
     void *deva_buff2 = nullptr, *devb_buff2 = nullptr;
+    int *devrnd_buff = nullptr;
 
     cudaStream_t a_stream, b_stream;
 
+    size_t sz = FLAGS_size / FLAGS_type_size, typesize = FLAGS_type_size;
+    
     // Allocate buffers
     if (a > 0)
     {
@@ -127,7 +176,36 @@ void CopySegmentUVA(int a, int b)
     {
         CUDA_CHECK_RET(cudaMallocHost(&devb_buff, FLAGS_size));
         CUDA_CHECK_RET(cudaMallocHost(&devb_buff2, FLAGS_size));
-    }   
+    }
+
+    if (FLAGS_random)
+    {
+        // Create and allocate random index buffer
+        std::vector<int> host_rnd (sz);
+
+        // Randomize
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dist(0, sz - 1);
+        for (size_t i = 0; i < sz; ++i)
+            host_rnd[i] = dist(gen);
+
+        // Device->Device / Host->Device
+        if (b > 0)
+        {
+            CUDA_CHECK_RET(cudaSetDevice(b - 1));
+        }
+        else if (a > 0) // Device->Host
+        {
+            CUDA_CHECK_RET(cudaSetDevice(a - 1));
+        }
+
+        CUDA_CHECK_RET(cudaMalloc(&devrnd_buff, sz * sizeof(int)));
+        CUDA_CHECK_RET(cudaMemcpy(devrnd_buff, host_rnd.data(),
+                                  sz * sizeof(int), cudaMemcpyHostToDevice));
+    }
+
+    
     CUDA_CHECK_RET(cudaStreamCreateWithFlags(&b_stream, cudaStreamNonBlocking));
 
     // Synchronize devices before copying
@@ -142,7 +220,6 @@ void CopySegmentUVA(int a, int b)
         CUDA_CHECK_RET(cudaDeviceSynchronize());
     }
 
-    size_t sz = FLAGS_size / FLAGS_type_size, typesize = FLAGS_type_size;
     dim3 block_dim (FLAGS_block_size),
          grid_dim((sz + FLAGS_block_size - 1) / FLAGS_block_size);
 
@@ -159,9 +236,26 @@ void CopySegmentUVA(int a, int b)
     {
         if (b > 0)
             CUDA_CHECK_RET(cudaSetDevice(b - 1));
-        DispatchCopy(devb_buff, deva_buff, sz, typesize,
-                     grid_dim, block_dim, b_stream);
+        else
+            CUDA_CHECK_RET(cudaSetDevice(a - 1));
 
+        if (FLAGS_random)
+        {
+            if (FLAGS_write)
+                DispatchCopyRandom<true>(devb_buff, deva_buff, devrnd_buff,
+                                         sz, typesize, grid_dim, block_dim,
+                                         b_stream);
+            else
+                DispatchCopyRandom<false>(devb_buff, deva_buff, devrnd_buff,
+                                          sz, typesize, grid_dim, block_dim,
+                                          b_stream);
+        }
+        else
+        {
+            DispatchCopy(devb_buff, deva_buff, sz, typesize,
+                         grid_dim, block_dim, b_stream);
+        }
+        
         if (FLAGS_fullduplex)
         {
             if (a > 0)
@@ -224,6 +318,20 @@ void CopySegmentUVA(int a, int b)
         CUDA_CHECK_RET(cudaFreeHost(devb_buff));
         CUDA_CHECK_RET(cudaFreeHost(devb_buff2));
     }
+
+    // Free randomized buffer, if exists
+    if (FLAGS_random)
+    {
+        if (b > 0)
+        {
+            CUDA_CHECK_RET(cudaSetDevice(b - 1));
+        }
+        else if (a > 0)
+        {
+            CUDA_CHECK_RET(cudaSetDevice(a - 1));
+        }
+        CUDA_CHECK_RET(cudaFree(devrnd_buff));
+    }
     CUDA_CHECK_RET(cudaStreamDestroy(b_stream));
 }
 
@@ -248,6 +356,11 @@ int main(int argc, char **argv)
         printf("Invalid --to flag. Only %d GPUs are available.\n", ndevs);
         return 2;
     }
+    if (FLAGS_random && FLAGS_fullduplex)
+    {
+        printf("Cannot enable both --random and --fullduplex flags\n");
+        return 3;
+    }
     
     printf("Enabling peer-to-peer access\n");
 
@@ -271,6 +384,7 @@ int main(int argc, char **argv)
     printf("Data size: %.2f MB\n", (FLAGS_size / 1024.0f / 1024.0f));
     printf("Data type size: %d bytes\n", (int)FLAGS_type_size);
     printf("Block size: %d\n", (int)FLAGS_block_size);
+    printf("Access type: %s\n", (FLAGS_random ? "Randomized" : "Coalesced"));
     printf("Repetitions: %d\n", (int)FLAGS_repetitions);
     printf("\n");
     

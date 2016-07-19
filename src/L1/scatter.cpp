@@ -198,6 +198,18 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    printf("Enabling peer-to-peer access\n");
+    
+    // Enable peer-to-peer access       
+    for(int i = 0; i < ndevs; ++i)
+    {
+        CUDA_CHECK(cudaSetDevice(i));
+        for(int j = 0; j < ndevs; ++j)
+            if (i != j)
+                cudaDeviceEnablePeerAccess(j, 0);
+    } 
+
+    
     std::vector<std::thread> threads;
     maps::multi::Barrier bar (ndevs + 1);
     std::vector<double> results (ndevs, 0.0);
