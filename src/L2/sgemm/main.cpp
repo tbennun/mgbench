@@ -79,10 +79,10 @@ int main(int argc, char **argv)
     cudaError_t cudaStatus = cudaDeviceReset();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
+        return 3;
     }
 
     printf("Overall: %s\n", overall ? "OK" : "FAILED");
     
-    return 0;
+    return overall ? 0 : 4;
 }

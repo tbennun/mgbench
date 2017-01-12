@@ -52,6 +52,11 @@ int main(int argc, char **argv)
     if (cudaGetDeviceCount(&ndevs) != cudaSuccess)
         return 1;
 
+    int gpuid = -1;
+    if (argc > 1) {
+        gpuid = atoi(argv[1]);
+    }
+
     int version = 0;
     CUDA_CHECK(cudaDriverGetVersion(&version));
     std::cout << "Driver version: " << (version / 1000) << "."
@@ -66,6 +71,9 @@ int main(int argc, char **argv)
     // Print information for each GPU
     for (int i = 0; i < ndevs; ++i)
     {
+        // Skip GPUs
+        if (gpuid >= 0 && i != gpuid) continue;
+
         CUDA_CHECK(cudaSetDevice(i));
         cudaDeviceProp props;
         CUDA_CHECK(cudaGetDeviceProperties(&props, i));
@@ -74,7 +82,7 @@ int main(int argc, char **argv)
                   << props.pciDomainID << "/" << props.pciBusID
                   << "/" << props.pciDeviceID << ")" << std::endl
 
-
+                  << "Compute capability: sm_" << props.major << props.minor << std::endl
                   << "Global memory: " << (props.totalGlobalMem/1024.0/1024.0)
                   << " MB" << std::endl
                   << "Constant memory: " << props.totalConstMem
