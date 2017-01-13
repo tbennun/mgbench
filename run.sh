@@ -115,19 +115,22 @@ echo "L2 Tests"
 echo "--------"
 
 # Matrix multiplication
-echo "1/6 Matrix multiplication (correctness)"
+echo "1/7 Matrix multiplication (correctness)"
 ./build/sgemm -n 1024 -k 1024 -m 1024 --repetitions=100 --regression=true > l2-sgemm-correctness.log
-echo "2/6 Matrix multiplication (performance)"
+echo "2/7 Matrix multiplication (performance, single precision)"
 ./build/sgemm -n 8192 -k 8192 -m 8192 --repetitions=100 --regression=false > l2-sgemm-perf.log
+echo "3/7 Matrix multiplication (performance, double precision)"
+./build/sgemm -n 2048 -k 2048 -m 2048 --repetitions=100 --regression=false > l2-dgemm-perf.log
+
 
 # Stencil operator
-echo "3/6 Stencil (correctness)"
+echo "4/7 Stencil (correctness)"
 ./build/gol --repetitions=5 --regression=true > l2-gol-correctness.log
-echo "4/6 Stencil (performance)"
+echo "5/7 Stencil (performance)"
 ./build/gol --repetitions=1000 --regression=false > l2-gol-perf.log
 
 # Test each GPU separately
-echo "5/6 Stencil (single GPU correctness)"
+echo "6/7 Stencil (single GPU correctness)"
 echo "" > l2-gol-single.log
 i=0
 while [ $i -lt $NUMGPUS ]
@@ -142,7 +145,7 @@ done
 # Temperature test
 if [ $TEMPTEST -eq 1 ]
 then
-    echo "6/6 Cooling"
+    echo "7/7 Cooling"
 
     # Measure initial temperature
     echo "Initial temp: " > l2-cooling.log

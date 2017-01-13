@@ -54,7 +54,8 @@ DEFINE_int32(m, 1536, "Matrix A height");
 DEFINE_int32(n, 2048, "Matrix A width (B height)");
 DEFINE_int32(k, 1024, "Matrix B width");
 
-DEFINE_double(alpha, 1.0, "SGEMM Alpha");
+DEFINE_double(alpha, 1.0, "GEMM Alpha");
+DEFINE_bool(double, false, "Use double-precision matrices");
 
 DEFINE_bool(multithreading, true, "Run a thread per device");
 DEFINE_bool(regression, true, "Perform regression tests");
@@ -81,8 +82,9 @@ DEFINE_bool(scaling, false, "Scaling test mode");
 
 // Taken from CUDA samples
 /* Host implementation of a simple version of sgemm */
-static void simple_sgemm(int m, int n, int k, float alpha, const float *A, const float *B,
-                         float beta, float *C)
+template <typename T>
+static void simple_gemm(int m, int n, int k, T alpha, const T *A, const T *B,
+                         T beta, T *C)
 {
     int i;
     int j;
@@ -92,7 +94,7 @@ static void simple_sgemm(int m, int n, int k, float alpha, const float *A, const
     {
         for (j = 0; j < k; ++j)
         {
-            float prod = 0;
+            T prod = 0;
 
             for (l = 0; l < n; ++l)
             {
@@ -105,18 +107,26 @@ static void simple_sgemm(int m, int n, int k, float alpha, const float *A, const
 }
 
 
-struct SGEMMContext
+struct GEMMContext
 {
     std::vector<cublasHandle_t> handles;
 };
 
-bool SGEMMRoutine(void *context, int deviceIdx, cudaStream_t stream,
+template <typename T>
+bool GEMMRoutine(void *context, int deviceIdx, cudaStream_t stream,
                   const maps::multi::GridSegment& task_segment,
                   const std::vector<void *>& parameters,
                   const std::vector<maps::multi::DatumSegment>& container_segments,
-                  const std::vector<maps::multi::DatumSegment>& container_allocation)
+                  const std::vector<maps::multi::DatumSegment>& container_allocation);
+
+template <>
+bool GEMMRoutine<float>(void *context, int deviceIdx, cudaStream_t stream,
+                        const maps::multi::GridSegment& task_segment,
+                        const std::vector<void *>& parameters,
+                        const std::vector<maps::multi::DatumSegment>& container_segments,
+                        const std::vector<maps::multi::DatumSegment>& container_allocation)
 {
-    SGEMMContext *c = (SGEMMContext *)context;
+    GEMMContext *c = (GEMMContext *)context;
     if (!c)
         return false;
 
@@ -141,20 +151,53 @@ bool SGEMMRoutine(void *context, int deviceIdx, cudaStream_t stream,
     return true;
 }
 
-bool TestMatMulMAPSMultiUnmodified(int ngpus)
+template <>
+bool GEMMRoutine<double>(void *context, int deviceIdx, cudaStream_t stream,
+                        const maps::multi::GridSegment& task_segment,
+                        const std::vector<void *>& parameters,
+                        const std::vector<maps::multi::DatumSegment>& container_segments,
+                        const std::vector<maps::multi::DatumSegment>& container_allocation)
 {
-    float alpha = (float)FLAGS_alpha, beta = 0.0f;
+    GEMMContext *c = (GEMMContext *)context;
+    if (!c)
+        return false;
+
+    int m, n, k;
+    double alpha, beta;
+    maps::multi::GetConstantParameter(parameters[3], alpha);
+    maps::multi::GetConstantParameter(parameters[4], beta);
+    
+    m = container_segments[0].m_dimensions[0];
+    n = container_segments[1].m_dimensions[0];
+    k = container_segments[2].m_dimensions[1];
+
+    CUBLAS_CHECK(cublasSetStream(c->handles[deviceIdx], stream));
+    CUBLAS_CHECK(cublasDgemm(c->handles[deviceIdx], CUBLAS_OP_N, CUBLAS_OP_N, m, k, n, &alpha, 
+                 (double *)parameters[0],
+                 container_segments[0].m_stride_bytes / sizeof(double),
+                 (double *)parameters[1],
+                 container_segments[1].m_stride_bytes / sizeof(double), &beta,
+                 (double *)parameters[2],
+                 container_segments[2].m_stride_bytes / sizeof(double)));
+
+    return true;
+}
+
+template <typename T>
+bool RunGEMM(int ngpus)
+{
+    T alpha = (T)FLAGS_alpha, beta = T(0);
     size_t m = FLAGS_m, n = FLAGS_n, k = FLAGS_k;
 
     srand((FLAGS_random_seed < 0) ? curtime : FLAGS_random_seed);
 
-    std::vector<float> hostA(m * n), hostB(n * k), Cres(m * k);    
+    std::vector<T> hostA(m * n), hostB(n * k), Cres(m * k);
 
     // Generate input data
     for (size_t i = 0; i < m * n; ++i)
-        hostA[i] = (float)rand() / (float)RAND_MAX;
+        hostA[i] = (T)rand() / (T)RAND_MAX;
     for (size_t i = 0; i < n * k; ++i)
-        hostB[i] = (float)rand() / (float)RAND_MAX;
+        hostB[i] = (T)rand() / (T)RAND_MAX;
 
     // Create GPU list
     int num_gpus;
@@ -164,7 +207,7 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
         gpuids.push_back((i + FLAGS_gpuoffset) % num_gpus);
 
     // Create CUBLAS handles
-    SGEMMContext context;
+    GEMMContext context;
     for (int k = 0; k < ngpus; ++k)
     {
         MAPS_CUDA_CHECK(cudaSetDevice(gpuids[k]));
@@ -182,7 +225,7 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
     }
 
     // Define data structures to be used
-    maps::multi::Matrix<float> A (m, n), B (n, k), C (m, k);
+    maps::multi::Matrix<T> A (m, n), B (n, k), C (m, k);
 
     A.Bind(&hostA[0]);
     B.Bind(&hostB[0]);
@@ -191,16 +234,16 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
     if (!FLAGS_scaling)
     {
         maps::multi::AnalyzeCall(sched, dim3(), dim3(), 
-            maps::multi::Block2DUnmodified<true, float>(A),
-            maps::multi::Block2DUnmodified<false, float>(B),
-            maps::multi::StructuredInjectiveMatrixO<float>(C));
+            maps::multi::Block2DUnmodified<true, T>(A),
+            maps::multi::Block2DUnmodified<false, T>(B),
+            maps::multi::StructuredInjectiveMatrixO<T>(C));
     }
     else
     {
         maps::multi::AnalyzeCallAll(sched, dim3(), dim3(), 
-            maps::multi::Block2DUnmodified<true, float>(A),
-            maps::multi::Block2DUnmodified<false, float>(B),
-            maps::multi::StructuredInjectiveMatrixO<float>(C));
+            maps::multi::Block2DUnmodified<true, T>(A),
+            maps::multi::Block2DUnmodified<false, T>(B),
+            maps::multi::StructuredInjectiveMatrixO<T>(C));
 
     }
     
@@ -220,10 +263,10 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
             // Invoke the kernels
             for (int i = 0; i < FLAGS_repetitions; ++i)
             {
-                sched.InvokeUnmodified(SGEMMRoutine, &context, dim3(),
-                                       maps::multi::Block2DUnmodified<true, float>(A),
-                                       maps::multi::Block2DUnmodified<false, float>(B),
-                                       maps::multi::StructuredInjectiveMatrixO<float>(C),
+                sched.InvokeUnmodified(GEMMRoutine<T>, &context, dim3(),
+                                       maps::multi::Block2DUnmodified<true, T>(A),
+                                       maps::multi::Block2DUnmodified<false, T>(B),
+                                       maps::multi::StructuredInjectiveMatrixO<T>(C),
                                        alpha, beta);
             }
         }
@@ -232,10 +275,10 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
             // Invoke the kernels
             for (int i = 0; i < FLAGS_repetitions; ++i)
             {
-                sched.InvokeAllUnmodified(SGEMMRoutine, &context, dim3(),
-                                          maps::multi::Block2DUnmodified<true, float>(A),
-                                          maps::multi::Block2DUnmodified<false, float>(B),
-                                          maps::multi::StructuredInjectiveMatrixO<float>(C),
+                sched.InvokeAllUnmodified(GEMMRoutine<T>, &context, dim3(),
+                                          maps::multi::Block2DUnmodified<true, T>(A),
+                                          maps::multi::Block2DUnmodified<false, T>(B),
+                                          maps::multi::StructuredInjectiveMatrixO<T>(C),
                                           alpha, beta);
             }        
         }
@@ -253,12 +296,12 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
 
     if (FLAGS_heat == 0)
     {
-        printf("SGEMM - MAPS (unmodified routine): %f ms\n", 
+        printf("%sGEMM - MAPS (unmodified routine): %f ms\n", (sizeof(T) == sizeof(float) ? "S" : "D"),
                std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0f / FLAGS_repetitions);
     }
     else
     {
-        printf("SGEMM successfully ran for %f seconds\n",
+        printf("%sGEMM successfully ran for %f seconds\n", (sizeof(T) == sizeof(float) ? "S" : "D"),
                std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() * 1e-6);
     }
        
@@ -267,19 +310,19 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
     // Regression
     if (!FLAGS_scaling && FLAGS_regression)
     {
-        float meanDiff = 0.0f;
+        T meanDiff = 0.0f;
         int numDiffs = 0;
 
         // Gather back to host
         C.Bind(&Cres[0]);
         maps::multi::Gather(sched, C);
         
-        std::vector<float> hostC(m * k, 0);
-        simple_sgemm(m, n, k, alpha, &hostA[0], &hostB[0], beta, &hostC[0]);
+        std::vector<T> hostC(m * k, 0);
+        simple_gemm<T>(m, n, k, alpha, &hostA[0], &hostB[0], beta, &hostC[0]);
 
         for (size_t i = 0; i < m * k; ++i)
         {
-            float diff = fabs(1.0f - (Cres[i] / hostC[i]));
+            T diff = fabs(1.0f - (Cres[i] / hostC[i]));
             if (diff > 1e-3)
             {
                 if (FLAGS_print_diffs)
@@ -305,4 +348,12 @@ bool TestMatMulMAPSMultiUnmodified(int ngpus)
     }
 
     return result;
+}
+
+bool TestMatMulMAPSMultiUnmodified(int ngpus) 
+{
+    if (FLAGS_double)
+        return RunGEMM<double>(ngpus);
+    else
+        return RunGEMM<float>(ngpus);
 }
