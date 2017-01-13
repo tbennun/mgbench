@@ -50,6 +50,9 @@
 #define BW 16
 #define BH 32
 
+#define IPX 4
+#define IPY 2
+
 DEFINE_int32(width,  16384, "Image width");
 DEFINE_int32(height, 16384, "Image height");
 
@@ -62,23 +65,20 @@ unsigned int curtime = (unsigned int)time(NULL);
 DEFINE_int32(gpuoffset, 0, "Offset the first used GPU ID");
 DEFINE_bool(save_images, true, "Save images if regression test failed");
 
-DEFINE_int32(elemsize, 8, "Element size in bits (options: 8-bit [uint8_t], 16-bit [uint16_t], 32-bit [float], 64-bit [double])");
-
-template<typename T>
-void GameOfLife_CPUTick(const T *in, size_t inStride, T *out, size_t outStride, int width, int height)
+void GameOfLife_CPUTick(const unsigned char *in, size_t inStride, unsigned char *out, size_t outStride, int width, int height)
 {
     for (int i = 0; i < height; i++)
     {
         for (int j = 0; j < width; j++)
         {
-            T numLiveNeighbors = T(0);
-            T isLive;
+            int numLiveNeighbors = 0;
+            int isLive;
 
             for (int k = -1; k <= 1; k++)
             {
                 for (int m = -1; m <= 1; m++)
                 {
-                    T val = in[inStride * maps::Wrap((i + k), height) + maps::Wrap((j + m), width)];
+                    unsigned char val = in[inStride * maps::Wrap((i + k), height) + maps::Wrap((j + m), width)];
                     if (k == 0 && m == 0)
                         isLive = val;
                     else
@@ -104,10 +104,10 @@ void GameOfLife_CPUTick(const T *in, size_t inStride, T *out, size_t outStride, 
     }
 }
 
-template<typename T, int BLOCK_WIDTH, int BLOCK_HEIGHT, int ITEMS_PER_THREAD, int ROWS_PER_THREAD>
-__global__ void GameOfLifeTickMMAPS MAPS_MULTIDEF(maps::Window2D<T, BLOCK_WIDTH, BLOCK_HEIGHT, 
+template<int BLOCK_WIDTH, int BLOCK_HEIGHT, int ITEMS_PER_THREAD, int ROWS_PER_THREAD>
+__global__ void GameOfLifeTickMMAPS MAPS_MULTIDEF(maps::Window2D<unsigned char, BLOCK_WIDTH, BLOCK_HEIGHT, 
                                                                  1, maps::WB_WRAP, ITEMS_PER_THREAD, ROWS_PER_THREAD> inFrame,
-                                                  maps::StructuredInjectiveOutput<T, 2, BLOCK_WIDTH, BLOCK_HEIGHT, 1, 
+                                                  maps::StructuredInjectiveOutput<unsigned char, 2, BLOCK_WIDTH, BLOCK_HEIGHT, 1, 
                                                                                   ITEMS_PER_THREAD, ROWS_PER_THREAD> outFrame)
 {
     MAPS_MULTI_INITVARS(inFrame, outFrame);
@@ -119,8 +119,8 @@ __global__ void GameOfLifeTickMMAPS MAPS_MULTIDEF(maps::Window2D<T, BLOCK_WIDTH,
     #pragma unroll
     MAPS_FOREACH(oiter, outFrame)
     {
-        T numLiveNeighbors = T(0);
-        T isLive;
+        int numLiveNeighbors = 0;
+        int isLive;
 
         // Determine number of live neighbors
         /////////////////////////////////////////
@@ -153,8 +153,7 @@ __global__ void GameOfLifeTickMMAPS MAPS_MULTIDEF(maps::Window2D<T, BLOCK_WIDTH,
     outFrame.commit();
 }
 
-template<typename T>
-void SavePGMFile(const T *data, size_t width, size_t height, const char *filename)
+void SavePGMFile(const unsigned char *data, size_t width, size_t height, const char *filename)
 {
     if (!FLAGS_save_images)
         return;
@@ -162,19 +161,19 @@ void SavePGMFile(const T *data, size_t width, size_t height, const char *filenam
 	FILE *fp = fopen(filename, "wb");
 	if (fp)
 	{
-		fprintf(fp, "P5\n%lu %lu\n1\n", (unsigned long)width, (unsigned long)height);
-		fwrite(data, sizeof(T), width * height, fp);
+		fprintf(fp, "P5\n%lu %lu\n1\n", width, height);
+		fwrite(data, sizeof(unsigned char), width * height, fp);
 		fclose(fp);
 	}
 }
 
-template<typename T>
-bool GoLCPURegression(const T *otherResult)
+
+bool GoLCPURegression(const unsigned char *otherResult)
 {
     if (!FLAGS_regression)
         return true;
 
-    T *dev_inImage = NULL, *dev_outImage = NULL;
+    unsigned char *dev_inImage = NULL, *dev_outImage = NULL;
 
     size_t width = FLAGS_width, height = FLAGS_height, inStride = 0, outStride = 0;
 
@@ -183,21 +182,21 @@ bool GoLCPURegression(const T *otherResult)
     srand((FLAGS_random_seed < 0) ? curtime : FLAGS_random_seed);
 
     // Create input data
-    std::vector<T> host_image(width * height, 0);
+    std::vector<unsigned char> host_image(width * height, 0);
     for (size_t i = 0; i < width * height; ++i)
-        host_image[i] = (rand() < (RAND_MAX / 4)) ? T(1) : T(0);
+        host_image[i] = (rand() < (RAND_MAX / 4)) ? 1 : 0;
     
-    std::vector<T> host_resultMAPS(width * height, 0);
+    std::vector<unsigned char> host_resultMAPS(width * height, 0);
 
-    inStride = outStride = sizeof(T) * width;
+    inStride = outStride = sizeof(unsigned char) * width;
 
     dev_inImage = &host_image[0];
     dev_outImage = &host_resultMAPS[0];
     
     for (int i = 0; i < FLAGS_repetitions; i++)
     {
-        GameOfLife_CPUTick(dev_inImage, inStride / sizeof(T),
-                           dev_outImage, outStride / sizeof(T), (int)width, (int)height);
+        GameOfLife_CPUTick(dev_inImage, inStride / sizeof(unsigned char),
+                           dev_outImage, outStride / sizeof(unsigned char), (int)width, (int)height);
         
         std::swap(dev_inImage, dev_outImage);
     }
@@ -227,17 +226,16 @@ bool GoLCPURegression(const T *otherResult)
     return (numErrors == 0);
 }
 
-template<typename T, int IPX, int IPY>
-bool RunGoL(int ngpus)
+bool TestGoLMAPSMulti(int ngpus)
 {
     size_t width = FLAGS_width, height = FLAGS_height;
 
     srand((FLAGS_random_seed < 0) ? curtime : FLAGS_random_seed);
 
     // Create input data
-    std::vector<T> host_image(width * height, 0);
+    std::vector<unsigned char> host_image(width * height, 0);
     for (size_t i = 0; i < width * height; ++i)
-        host_image[i] = (rand() < (RAND_MAX / 4)) ? T(1) : T(0);
+        host_image[i] = (rand() < (RAND_MAX / 4)) ? 1 : 0;
 
     // Create GPU list
     int num_gpus;
@@ -254,20 +252,20 @@ bool RunGoL(int ngpus)
     }
     
     // Define data structures to be used
-    maps::multi::Matrix<T> A (width, height), B (width, height);
+    maps::multi::Matrix<unsigned char> A (width, height), B (width, height);
 
     A.Bind(&host_image[0]); // Automatic deduction of stride
 
-    std::vector<T> MAPSMulti_result(width * height, 0);
+    std::vector<unsigned char> MAPSMulti_result(width * height, 0);
     
     dim3 block_dims(BW, BH, 1);
     dim3 grid_dims(maps::RoundUp((unsigned int)width, block_dims.x), maps::RoundUp((unsigned int)height, block_dims.y), 1);
 
     // Analyze the memory access patterns for allocation purposes
-    maps::multi::AnalyzeCall(sched, grid_dims, block_dims, maps::multi::Window2D<T, BW, BH, 1, maps::WB_WRAP, IPX, IPY>(A),
-                             maps::multi::StructuredInjectiveMatrixO<T, IPX, IPY>(B));
-    maps::multi::AnalyzeCall(sched, grid_dims, block_dims, maps::multi::Window2D<T, BW, BH, 1, maps::WB_WRAP, IPX, IPY>(B),
-                             maps::multi::StructuredInjectiveMatrixO<T, IPX, IPY>(A));
+    maps::multi::AnalyzeCall(sched, grid_dims, block_dims, maps::multi::Window2D<unsigned char, BW, BH, 1, maps::WB_WRAP, IPX, IPY>(A),
+                             maps::multi::StructuredInjectiveMatrixO<unsigned char, IPX, IPY>(B));
+    maps::multi::AnalyzeCall(sched, grid_dims, block_dims, maps::multi::Window2D<unsigned char, BW, BH, 1, maps::WB_WRAP, IPX, IPY>(B),
+                             maps::multi::StructuredInjectiveMatrixO<unsigned char, IPX, IPY>(A));
 
 
     for (int i = 0; i < num_gpus; i++)
@@ -282,13 +280,13 @@ bool RunGoL(int ngpus)
     for (int i = 0; i < FLAGS_repetitions; ++i)
     {
         if (i % 2 == 0)
-            maps::multi::Invoke(sched, GameOfLifeTickMMAPS<T, BW, BH, IPX, IPY>, grid_dims, block_dims,
-                                maps::multi::Window2D<T, BW, BH, 1, maps::WB_WRAP, IPX, IPY>(A), 
-                                maps::multi::StructuredInjectiveMatrixO<T, IPX, IPY>(B));
+            maps::multi::Invoke(sched, GameOfLifeTickMMAPS<BW, BH, IPX, IPY>, grid_dims, block_dims,
+                                maps::multi::Window2D<unsigned char, BW, BH, 1, maps::WB_WRAP, IPX, IPY>(A), 
+                                maps::multi::StructuredInjectiveMatrixO<unsigned char, IPX, IPY>(B));
         else
-            maps::multi::Invoke(sched, GameOfLifeTickMMAPS<T, BW, BH, IPX, IPY>, grid_dims, block_dims,
-                                maps::multi::Window2D<T, BW, BH, 1, maps::WB_WRAP, IPX, IPY>(B), 
-                                maps::multi::StructuredInjectiveMatrixO<T, IPX, IPY>(A));
+            maps::multi::Invoke(sched, GameOfLifeTickMMAPS<BW, BH, IPX, IPY>, grid_dims, block_dims,
+                                maps::multi::Window2D<unsigned char, BW, BH, 1, maps::WB_WRAP, IPX, IPY>(B), 
+                                maps::multi::StructuredInjectiveMatrixO<unsigned char, IPX, IPY>(A));
     }
 
     sched.WaitAll();
@@ -307,22 +305,4 @@ bool RunGoL(int ngpus)
     printf("MAPS-Multi: Done!\n");
 
     return GoLCPURegression(&MAPSMulti_result[0]);
-}
-
-bool TestGoLMAPSMulti(int ngpus)
-{
-    switch (FLAGS_elemsize) {
-    default:
-        printf("ERROR: Unsupported element size of %d bits given\n", FLAGS_elemsize);
-        return false;
-
-    case 8:
-        return RunGoL<unsigned char, 4, 2>(ngpus);
-    case 16:
-        return RunGoL<unsigned short, 2, 2>(ngpus);
-    case 32:
-        return RunGoL<float, 1, 1>(ngpus);
-    case 64:
-        return RunGoL<double, 1, 1>(ngpus);
-    }
 }
