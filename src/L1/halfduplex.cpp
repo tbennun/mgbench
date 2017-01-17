@@ -35,7 +35,9 @@
 #include <cuda_runtime.h>
 
 DEFINE_uint64(size, 100*1024*1024, "The amount of data to transfer");
+DEFINE_uint64(chunksize, 0, "If not zero, fragments the data into chunksize-byte chunks");
 DEFINE_uint64(repetitions, 100, "Number of repetitions to average");
+DEFINE_bool(sync_chunks, false, "If true, synchronizes at the end of each fragment transfer");
 
 DEFINE_int32(from, -1, "Only copy from a single GPU index/host (Host is "
              "0, GPUs start from 1), or -1 for all");
@@ -62,23 +64,49 @@ void CopySegment(int a, int b)
     CUDA_CHECK(cudaSetDevice(b));
     CUDA_CHECK(cudaMalloc(&devb_buff, FLAGS_size));
 
+    // Create event (for synced fragmentation)
+    cudaEvent_t cuda_event;
+    CUDA_CHECK(cudaEventCreateWithFlags(&cuda_event, cudaEventDisableTiming));
+
     // Synchronize devices before copying
     CUDA_CHECK(cudaSetDevice(a));
     CUDA_CHECK(cudaDeviceSynchronize());
     CUDA_CHECK(cudaSetDevice(b));
     CUDA_CHECK(cudaDeviceSynchronize());
 
+    size_t chunk_size = ((FLAGS_chunksize == 0) ? FLAGS_size : FLAGS_chunksize);
+    int num_chunks = (FLAGS_size + chunk_size - 1) / chunk_size;
+    size_t chunk_remainder = FLAGS_size - (num_chunks - 1) * chunk_size;
+
     // Copy
     auto t1 = std::chrono::high_resolution_clock::now();
     for(uint64_t i = 0; i < FLAGS_repetitions; ++i)
     {
-        CUDA_CHECK(cudaMemcpyPeerAsync(devb_buff, b, deva_buff, a,
-                                       FLAGS_size));
+        char *dstp = (char *)devb_buff, *srcp = (char *)deva_buff;
+        size_t curchunk = chunk_size;
+
+        for (int chunk = 0; chunk < num_chunks; ++chunk)
+        {
+            if (chunk == num_chunks - 1)
+                curchunk = chunk_remainder;
+
+            CUDA_CHECK(cudaMemcpyPeerAsync(dstp, b, srcp, a,
+                                           curchunk));
+
+            dstp += chunk_size;
+            srcp += chunk_size;
+
+            if (FLAGS_sync_chunks)
+            {
+                CUDA_CHECK(cudaEventRecord(cuda_event));
+                CUDA_CHECK(cudaEventSynchronize(cuda_event));
+            }
+        }
+        CUDA_CHECK(cudaSetDevice(a));
+        CUDA_CHECK(cudaDeviceSynchronize());
+        CUDA_CHECK(cudaSetDevice(b));
+        CUDA_CHECK(cudaDeviceSynchronize());
     }
-    CUDA_CHECK(cudaSetDevice(a));
-    CUDA_CHECK(cudaDeviceSynchronize());
-    CUDA_CHECK(cudaSetDevice(b));
-    CUDA_CHECK(cudaDeviceSynchronize());
     auto t2 = std::chrono::high_resolution_clock::now();
 
     double mstime = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0 / FLAGS_repetitions;
@@ -88,6 +116,9 @@ void CopySegment(int a, int b)
     
     printf("%.2lf MB/s (%lf ms)\n", MBps, mstime);
     
+    // Destroy event
+    CUDA_CHECK(cudaEventDestroy(cuda_event));
+
     // Free buffers
     CUDA_CHECK(cudaSetDevice(a));
     CUDA_CHECK(cudaFree(deva_buff));
@@ -104,36 +135,65 @@ void CopyHostDevice(int dev, bool d2h)
     CUDA_CHECK(cudaMalloc(&dev_buff, FLAGS_size));    
     CUDA_CHECK(cudaMallocHost(&host_buff, FLAGS_size));
 
+    // Create event (for synced fragmentation)
+    cudaEvent_t cuda_event;
+    CUDA_CHECK(cudaEventCreateWithFlags(&cuda_event, cudaEventDisableTiming));
+
     // Synchronize devices before copying
     CUDA_CHECK(cudaSetDevice(dev));
     CUDA_CHECK(cudaDeviceSynchronize());
+
+    size_t chunk_size = ((FLAGS_chunksize == 0) ? FLAGS_size : FLAGS_chunksize);
+    int num_chunks = (FLAGS_size + chunk_size - 1) / chunk_size;
+    size_t chunk_remainder = FLAGS_size - (num_chunks - 1) * chunk_size;
 
     // Copy
     auto t1 = std::chrono::high_resolution_clock::now();
     for(uint64_t i = 0; i < FLAGS_repetitions; ++i)
     {
-        if (d2h)
+        char *devp = (char *)dev_buff, *hostp = (char *)host_buff;
+        size_t curchunk = chunk_size;
+
+        for (int chunk = 0; chunk < num_chunks; ++chunk)
         {
-            CUDA_CHECK(cudaMemcpyAsync(host_buff, dev_buff,
-                                       FLAGS_size, cudaMemcpyDeviceToHost));
+            if (chunk == num_chunks - 1)
+                curchunk = chunk_remainder;
+
+            if (d2h)
+            {
+                CUDA_CHECK(cudaMemcpyAsync(hostp, devp,
+                                           curchunk, cudaMemcpyDeviceToHost));
+            }
+            else
+            {
+                CUDA_CHECK(cudaMemcpyAsync(devp, hostp,
+                                           curchunk, cudaMemcpyHostToDevice));
+            }
+
+            devp += chunk_size;
+            hostp += chunk_size;
+
+            if (FLAGS_sync_chunks)
+            {
+                CUDA_CHECK(cudaEventRecord(cuda_event));
+                CUDA_CHECK(cudaEventSynchronize(cuda_event));
+            }
         }
-        else
-        {
-            CUDA_CHECK(cudaMemcpyAsync(dev_buff, host_buff,
-                                       FLAGS_size, cudaMemcpyHostToDevice));
-        }
+        CUDA_CHECK(cudaSetDevice(dev));
+        CUDA_CHECK(cudaDeviceSynchronize());
     }
-    CUDA_CHECK(cudaSetDevice(dev));
-    CUDA_CHECK(cudaDeviceSynchronize());
     auto t2 = std::chrono::high_resolution_clock::now();
 
     double mstime = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0 / FLAGS_repetitions;
 
     // MiB/s = [bytes / (1024^2)] / [ms / 1000]
     double MBps = (FLAGS_size / 1024.0 / 1024.0) / (mstime / 1000.0);
-    
+
     printf("%.2lf MB/s (%lf ms)\n", MBps, mstime);
-    
+
+    // Destroy event
+    CUDA_CHECK(cudaEventDestroy(cuda_event));
+
     // Free buffers
     CUDA_CHECK(cudaSetDevice(dev));
     CUDA_CHECK(cudaFree(dev_buff));
@@ -174,6 +234,12 @@ int main(int argc, char **argv)
 
     printf("GPUs: %d\n", ndevs);
     printf("Data size: %.2f MB\n", (FLAGS_size / 1024.0f / 1024.0f));
+    if (FLAGS_chunksize > 0)
+    {
+        printf("Fragment size: %.2f MB\n", (FLAGS_chunksize / 1024.0f / 1024.0f));
+        printf("Fragments per transfer: %d\n",
+               (int)((FLAGS_size + FLAGS_chunksize - 1) / FLAGS_chunksize));
+    }
     printf("Repetitions: %d\n", (int)FLAGS_repetitions);
     printf("\n");
     
