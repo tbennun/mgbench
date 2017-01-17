@@ -120,7 +120,7 @@ echo "1/7 Matrix multiplication (correctness)"
 echo "2/7 Matrix multiplication (performance, single precision)"
 ./build/sgemm -n 8192 -k 8192 -m 8192 --repetitions=100 --regression=false > l2-sgemm-perf.log
 echo "3/7 Matrix multiplication (performance, double precision)"
-./build/sgemm -n 2048 -k 2048 -m 2048 --repetitions=100 --regression=false > l2-dgemm-perf.log
+./build/sgemm -n 2048 -k 2048 -m 2048 --repetitions=100 --regression=false --double > l2-dgemm-perf.log
 
 
 # Stencil operator
