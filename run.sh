@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # MGBench: Multi-GPU Computing Benchmark Suite
 # Copyright (c) 2016, Tal Ben-Nun
 # All rights reserved.
@@ -28,8 +28,8 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 NUMGPUS=`./build/numgpus`
-echo "Number of GPUs: ${NUMGPUS}"
-if [ $NUMGPUS -eq 0 ]
+echo "Number of GPUs: ${NUMGPUS:-0}"
+if [ ${NUMGPUS:-0} -eq 0 ]
 then
     echo "No GPUs found, aborting test."
     exit 0
