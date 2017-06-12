@@ -33,7 +33,7 @@ int main(int argc, char **argv)
 {
     int ndevs = 0;
     if (cudaGetDeviceCount(&ndevs) != cudaSuccess)
-        return 1;
+        ndevs = -1;
     printf("%d\n", ndevs);
-    return 0;
+    return ndevs == -1;
 }
