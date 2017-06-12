@@ -29,7 +29,7 @@
 
 NUMGPUS=`./build/numgpus`
 echo "Number of GPUs: ${NUMGPUS}"
-if [ $NUMGPUS -eq 0 ]
+if [ $NUMGPUS -lt 1 ]
 then
     echo "No GPUs found, aborting test."
     exit 0
